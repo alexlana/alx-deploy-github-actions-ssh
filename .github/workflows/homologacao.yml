@@ -1,0 +1,116 @@
+################################################################
+# Implantação do WordPress em ambiente de homologação
+################################################################
+
+# ${{ secrets.SERVIDOR_USUARIO }} geralmente deve ser o usuário geral da hospedagem
+# ${{ secrets.SSH_PRIVATE_KEY }} é a chave privada. Preferencialmente, crie localmente e suba para o servidor com cPanel
+# ${{ secrets.SERVIDOR_ENDERECO }} é o endereço do servidor, pode ser o IP, para conexão SSH. Deve ser o mesmo do FTP
+# ${{ secrets.SERVIDOR_CAMINHO }} é o path completo do servidor, onde o site vai rodar. Tem como verificar no gerenciador de arquivos do cpanel
+# ${{ secrets.WP_PASTA }} é o diretório onde vai rodar o site
+
+
+name: Implantar em homologação
+on:
+  push:
+    branches:
+      - homologacao
+
+jobs:
+
+  testes:
+    permissions:
+      actions: write
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Cancelar disparos anteriores incompletos
+        uses: styfle/cancel-workflow-action@0.5.0
+        with:
+          access_token: ${{ github.token }}
+
+    # TO DO: criar os testes. Estudar o wp-cli: https://github.com/wp-cli/wp-cli-tests
+
+
+
+  implantacao:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout do repositório
+        uses: actions/checkout@v1
+
+      - name: Variáveis de ambiente (substituir arquivo local por template)
+        run: |
+          cd wordpress
+          rm -f .env.wp # dados do repositório local, vai ser substituído no repositório de homologação
+          mv .env.to.replace .env.wp
+
+      - name: Ajustar .htaccess 
+        run: |
+          cd wordpress
+          sed -i 's/RewriteBase\ \/$/RewriteBase\ \${{ secrets.WP_PASTA }}\//g' .htaccess
+          sed -i 's/RewriteRule\ \.\ \/index.php\ \[L\]/RewriteRule\ \.\ \${{ secrets.WP_PASTA }}\/index.php\ \[L\]/g' .htaccess
+
+      - name: Variáveis de ambiente (gravar valores no arquivo)
+        uses: franzbischoff/replace_envs@v1
+        env:
+          REPLACE_DB_NAME: ${{ secrets.DB_NAME }}
+          REPLACE_DB_USER: ${{ secrets.DB_USER }}
+          REPLACE_DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          REPLACE_DB_HOST: ${{ secrets.DB_HOST }}
+          REPLACE_WP_PASTA: ${{ secrets.WP_PASTA }}
+        with:
+          from_file: 'wordpress/.env.wp'
+          to_file: 'wordpress/.env.wp'
+          commit: 'false'
+
+      - name: Gravar chave privada e configurar conexão SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/chave-privada
+          chmod 600 ~/.ssh/chave-privada
+          ssh-keyscan ${{ secrets.SERVIDOR_ENDERECO }} >> ~/.ssh/known_hosts
+          cat >>~/.ssh/config <<END
+          Host homolog
+            HostName $SSH_HOST
+            User $SSH_USER
+            IdentityFile ~/.ssh/chave-privada
+            StrictHostKeyChecking no
+          END
+        env:
+          SSH_USER: ${{ secrets.SERVIDOR_USUARIO }}
+          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SERVIDOR_ENDERECO }}
+
+      - name: Copiar arquivos para hospedagem
+        run: |
+          rsync -avz wordpress/ homolog:${{ secrets.SERVIDOR_CAMINHO }}
+
+      - name: Copiar SQL para hospedagem
+        run: |
+          scp -F ~/.ssh/config -i ~/.ssh/chave-privada mysql/homologacao.sql homolog:${{ secrets.SERVIDOR_CAMINHO }}
+
+      - name: Verificar se o banco já existe no servidor
+        id: check_db_exists
+        run: |
+          table_exists=$( ssh homolog 'mysql -N -s -u ${{ secrets.DB_USER }} -p${{ secrets.DB_PASSWORD }} -h ${{ secrets.DB_HOST }} ${{ secrets.DB_NAME }} -e "SHOW TABLES LIKE \"${{ secrets.DB_PREFIX }}users\";"' )
+          echo "table_exists=$table_exists" >> "$GITHUB_OUTPUT"
+          echo "table_name=${{ secrets.DB_PREFIX }}users" >> "$GITHUB_OUTPUT"
+
+      - name: Importar banco de dados 
+        if: ${{ steps.check_db_exists.outputs.table_exists != steps.check_db_exists.outputs.table_name }}
+        run: |
+          ssh homolog 'mysql -u ${{ secrets.DB_USER }} -p${{ secrets.DB_PASSWORD }} -h ${{ secrets.DB_HOST }} ${{ secrets.DB_NAME }} < ${{ secrets.SERVIDOR_CAMINHO }}/homologacao.sql'
+
+      - name: Não importar banco de dados
+        if: ${{ steps.check_db_exists.outputs.table_exists == steps.check_db_exists.outputs.table_name }}
+        run: |
+          echo "IGNORANDO A CRIAÇÃO DO BANCO DE DADOS. Caso seja necessário atualizar o banco de dados, POR SEGURANÇA, faça isso manualmente."
+
+      - name: Remover arquivo SQL do servidor
+        run: |
+          ssh homolog 'rm -f ${{ secrets.SERVIDOR_CAMINHO }}/homologacao.sql'
+
+
