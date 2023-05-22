@@ -2,11 +2,11 @@
 # Implantação do WordPress em ambiente de homologação
 ################################################################
 
-# ${{ secrets.SERVIDOR_USUARIO }} geralmente deve ser o usuário geral da hospedagem
-# ${{ secrets.SSH_PRIVATE_KEY }} é a chave privada. Preferencialmente, crie localmente e suba para o servidor com cPanel
-# ${{ secrets.SERVIDOR_ENDERECO }} é o endereço do servidor, pode ser o IP, para conexão SSH. Deve ser o mesmo do FTP
-# ${{ secrets.SERVIDOR_CAMINHO }} é o path completo do servidor, onde o site vai rodar. Tem como verificar no gerenciador de arquivos do cpanel
+# ${{ secrets.SERVIDOR_WEB_USUARIO }} geralmente deve ser o usuário geral da hospedagem
+# ${{ secrets.SERVIDOR_WEB_ENDERECO }} é o endereço do servidor, pode ser o IP, para conexão SSH. Deve ser o mesmo do FTP
+# ${{ secrets.SERVIDOR_WEB_CAMINHO }} é o path completo do servidor, onde o site vai rodar. Tem como verificar no gerenciador de arquivos do cpanel
 # ${{ secrets.WP_PASTA }} é o diretório onde vai rodar o site
+# ${{ secrets.SSH_PRIVATE_KEY }} é a chave privada. Preferencialmente, crie localmente e suba para o servidor com cPanel
 
 
 name: Implantar em homologação
@@ -71,7 +71,7 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/chave-privada
           chmod 600 ~/.ssh/chave-privada
-          ssh-keyscan ${{ secrets.SERVIDOR_ENDERECO }} >> ~/.ssh/known_hosts
+          ssh-keyscan ${{ secrets.SERVIDOR_WEB_ENDERECO }} >> ~/.ssh/known_hosts
           cat >>~/.ssh/config <<END
           Host homolog
             HostName $SSH_HOST
@@ -80,17 +80,17 @@ jobs:
             StrictHostKeyChecking no
           END
         env:
-          SSH_USER: ${{ secrets.SERVIDOR_USUARIO }}
+          SSH_USER: ${{ secrets.SERVIDOR_WEB_USUARIO }}
           SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_HOST: ${{ secrets.SERVIDOR_ENDERECO }}
+          SSH_HOST: ${{ secrets.SERVIDOR_WEB_ENDERECO }}
 
       - name: Copiar arquivos para hospedagem
         run: |
-          rsync -avz wordpress/ homolog:${{ secrets.SERVIDOR_CAMINHO }}
+          rsync -avz wordpress/ homolog:${{ secrets.SERVIDOR_WEB_CAMINHO }}
 
       - name: Copiar SQL para hospedagem
         run: |
-          scp -F ~/.ssh/config -i ~/.ssh/chave-privada mysql/homologacao.sql homolog:${{ secrets.SERVIDOR_CAMINHO }}
+          scp -F ~/.ssh/config -i ~/.ssh/chave-privada mysql/homologacao.sql homolog:${{ secrets.SERVIDOR_WEB_CAMINHO }}
 
       - name: Verificar se o banco já existe no servidor
         id: check_db_exists
@@ -102,7 +102,7 @@ jobs:
       - name: Importar banco de dados 
         if: ${{ steps.check_db_exists.outputs.table_exists != steps.check_db_exists.outputs.table_name }}
         run: |
-          ssh homolog 'mysql -u ${{ secrets.DB_USER }} -p${{ secrets.DB_PASSWORD }} -h ${{ secrets.DB_HOST }} ${{ secrets.DB_NAME }} < ${{ secrets.SERVIDOR_CAMINHO }}/homologacao.sql'
+          ssh homolog 'mysql -u ${{ secrets.DB_USER }} -p${{ secrets.DB_PASSWORD }} -h ${{ secrets.DB_HOST }} ${{ secrets.DB_NAME }} < ${{ secrets.SERVIDOR_WEB_CAMINHO }}/homologacao.sql'
 
       - name: Não importar banco de dados
         if: ${{ steps.check_db_exists.outputs.table_exists == steps.check_db_exists.outputs.table_name }}
@@ -111,6 +111,6 @@ jobs:
 
       - name: Remover arquivo SQL do servidor
         run: |
-          ssh homolog 'rm -f ${{ secrets.SERVIDOR_CAMINHO }}/homologacao.sql'
+          ssh homolog 'rm -f ${{ secrets.SERVIDOR_WEB_CAMINHO }}/homologacao.sql'
 
 
